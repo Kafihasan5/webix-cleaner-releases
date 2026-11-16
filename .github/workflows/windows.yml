@@ -1,0 +1,55 @@
+name: Windows build
+
+# Started by release.sh after each Mac release: builds the Windows app from the
+# private source at the same commit and adds the installer to that release.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag, e.g. v1.0.12
+        required: true
+      ref:
+        description: Source commit
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: Kafihasan5/webix-cleaner
+          ref: ${{ inputs.ref }}
+          ssh-key: ${{ secrets.SOURCE_KEY }}
+          path: src
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src/windows
+
+      - name: Build the app
+        working-directory: src/windows
+        shell: pwsh
+        run: |
+          $env:WEBIX_VERSION = "${{ inputs.tag }}".TrimStart("v")
+          cargo build --release --locked
+
+      - name: Build the installer
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress | Out-Null }
+          $v = "${{ inputs.tag }}".TrimStart("v")
+          & $iscc "/DMyVersion=$v" src\windows\packaging\webix-cleaner.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Attach to the release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ inputs.tag }}" src\windows\dist\Webix-Cleaner-Setup-x64.exe --repo "${{ github.repository }}" --clobber
